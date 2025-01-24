@@ -1,21 +1,15 @@
 from snake_game import *
-from collections import deque
-import torch
-import random
+import pickle
 
 from tabular import *
 
-MAX_MEMORY = 100_000
-BATCH_SIZE = 1000
-LEARNIG_RATE = 0.001
-
 class Agent:
-
     #record the 'states' of the game
     def __init__(self, model):
         self.n_games = 0
         self.model = model
         self.score_history = []
+        self.move = [[1,0,0], [0,1,0],[0,0,1]] #straight right left
 
     def get_state(self, game):
         head = game.snake[0]
@@ -23,7 +17,7 @@ class Agent:
         block_left = Point(head.x - 20, head.y)
         block_right = Point(head.x + 20, head.y)
         block_up = Point(head.x, head.y - 20)
-        block_down = Point(head.x, head.y - 20)
+        block_down = Point(head.x, head.y + 20)
 
         direction_left = (game.direction == Direction.LEFT)
         direction_right = (game.direction == Direction.RIGHT)
@@ -65,11 +59,12 @@ class Agent:
             game.food.y > game.head.y   #food is below us
         ]
 
-        return np.array(state, dtype=int)
+        result = tuple(map(int, state))
+
+        return result
     
     def get_action(self, state):
-        action = self.model.action(state)
-        return action        
+        return self.model.action(state)
 
     def start_game(self):
         pass
@@ -80,10 +75,9 @@ def train():
     game = SnakeGame()
     game.reset()
     
-    max_games = 1000
+    max_games = 4000
 
     for i in range(max_games):
-        print("Starting Game: ", i)
         gg = False
 
         while not gg: 
@@ -91,25 +85,40 @@ def train():
             old_state = agent.get_state(game)
 
             # figure out what move it will play next
-            action = agent.get_action(old_state)
+            action_index = agent.get_action(old_state)
+            
+            action_vector = agent.move[action_index]
 
             # play the action in the game
-            reward, game_over, score = game.play_step(action)
+            reward, game_over, score = game.play_step(action_vector)
 
             # get the new state of the game
             new_state = agent.get_state(game)
 
             # update the model, in this case, update the Q table
-            agent.model.update(old_state, new_state, action, reward, game_over)
+            agent.model.update(old_state, new_state, action_index, reward, game_over)
 
 
             if game_over:
                 game.reset()
                 agent.n_games += 1
-                agent.score_history.append(score)
                 gg = True
+                
+        agent.score_history.append(score)
+        agent.model.epsilon = max(agent.model.epsilon_min,
+                                agent.model.epsilon * agent.model.epsilon_decay)
 
-        gg = False
+    data = {
+        'Q_table': agent.model.Q,
+        'score': agent.score_history,
+    }
+
+    # 1) Open a file in 'write binary' mode
+    with open('tabular.pkl', 'wb') as f:
+        # 2) Use pickle.dump to write the data to the file
+        pickle.dump(data, f)
+
+
 
 if __name__ == "__main__":
     train()
