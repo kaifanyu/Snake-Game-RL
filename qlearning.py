@@ -18,7 +18,7 @@ class tabular:
         self.epsilon_decay = 0.9995
         self.Q = dict()
             
-        with open('tabular.pkl', 'rb') as f:
+        with open('qlearn.pkl', 'rb') as f:
             data = pickle.load(f)
         self.Q = data['Q_table']
 

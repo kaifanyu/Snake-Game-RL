@@ -34,6 +34,13 @@ The game state consists of 11 boolean elements:
 ## Model 1: Q-Table
 
 ### Tabular Q-Learning Overview
-The Q-table is used to store the state-action values for reinforcement learning. Each time the snake moves, the current state is passed to the Q-table to determine the best action based on the learned policy.
+Quality-Learning Q(s,a) represents the cumulative reward the agent can obtain by taking action (a) at state (s). It measures the 'Quality' of the action in the state.
 
+Q(s,a) = argmax(a)Q(s,a): find the best action a that maximizes Q(s,a)
+## Type: Model Free, Off-Polify RL
 ---
+
+## Model 2: Value Iteration
+
+### Overview
+It pre-computes a matrix using DP to find the best action per state before playing the game. 

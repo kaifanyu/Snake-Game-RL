@@ -24,7 +24,7 @@ GREEN2 = (167, 201, 87)
 BLACK = (0,0,0)
 
 BLOCK_SIZE = 20
-SPEED = 4000
+SPEED = 40
 
 class SnakeGame:
 

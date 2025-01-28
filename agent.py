@@ -1,7 +1,8 @@
 from snake_game import *
 import pickle
-
-from tabular import *
+from collections import deque
+from qlearning import *
+from dqn import *
 
 class Agent:
     #record the 'states' of the game
@@ -10,6 +11,7 @@ class Agent:
         self.model = model
         self.score_history = []
         self.move = [[1,0,0], [0,1,0],[0,0,1]] #straight right left
+        self.max_games = 2000
 
     def get_state(self, game):
         head = game.snake[0]
@@ -59,34 +61,28 @@ class Agent:
             game.food.y > game.head.y   #food is below us
         ]
 
+        # keep result as a state tuple
         result = tuple(map(int, state))
-
         return result
-    
-    def get_action(self, state):
-        return self.model.action(state)
 
-    def start_game(self):
-        pass
 
-def train():
+def train_tabular():
     model = tabular()
     agent = Agent(model)
     game = SnakeGame()
     game.reset()
     
-    max_games = 4000
 
-    for i in range(max_games):
-        gg = False
+    for i in range(agent.max_games):
 
-        while not gg: 
+        while True: 
             # get the current state of the game
             old_state = agent.get_state(game)
 
             # figure out what move it will play next
-            action_index = agent.get_action(old_state)
+            action_index = agent.model.action(old_state)
             
+            # convert the index to move
             action_vector = agent.move[action_index]
 
             # play the action in the game
@@ -98,15 +94,15 @@ def train():
             # update the model, in this case, update the Q table
             agent.model.update(old_state, new_state, action_index, reward, game_over)
 
-
             if game_over:
                 game.reset()
                 agent.n_games += 1
-                gg = True
-                
+                break
+
         agent.score_history.append(score)
-        agent.model.epsilon = max(agent.model.epsilon_min,
-                                agent.model.epsilon * agent.model.epsilon_decay)
+        # decrement epsilon so over time, we explore less and follow our model
+        # agent.model.epsilon = max(agent.model.epsilon_min,
+        #                         agent.model.epsilon * agent.model.epsilon_decay)
 
     data = {
         'Q_table': agent.model.Q,
@@ -114,11 +110,59 @@ def train():
     }
 
     # 1) Open a file in 'write binary' mode
-    with open('tabular.pkl', 'wb') as f:
+    with open('qlearn.pkl', 'wb') as f:
         # 2) Use pickle.dump to write the data to the file
         pickle.dump(data, f)
 
 
+def train_dqn():
+    model = DeepQLearn()
+    agent = Agent(model=model)
+    game = SnakeGame()
+    game.reset()
+
+    episodes = 100
+    memory = deque([], maxlen=episodes)
+
+    print("Starting Game")
+    for i in range(agent.max_games):
+        recieve_reward = False
+
+        while True:
+            print("Game: ", i)
+            # get current state of game
+            old_state = agent.get_state(game)
+
+            # get action from model
+            action_index = agent.model.action(old_state)
+            action_vector = agent.move[action_index]
+
+            # play the action in game
+            reward, game_over, score = game.play_step(action_vector)
+
+            # get the new state after action
+            new_state = agent.get_state(game)
+
+            # if we recieved a reward and we have not yet recieved a reward
+            if reward > 0 and not recieve_reward:
+                recieve_reward = True   #set it to true
+
+            memory.append((old_state, action_index, new_state, reward, game_over))
+            # update the model
+            # if our memory is full and we have recieved reward
+            if len(memory) > episodes and recieve_reward:
+                mini_batch = random.sample(memory, 32)
+                agent.model.update(mini_batch)
+
+            # agent.model.update(old_state, new_state, action_index, reward, game_over)
+            if game_over:
+                game.reset()
+                agent.n_games += 1
+                break
+
+        agent.score_history.append(score)
+        agent.model.epsilon = max(agent.model.epsilon_min,
+                                agent.model.epsilon * agent.model.epsilon_decay)
 
 if __name__ == "__main__":
-    train()
+    train_dqn()
