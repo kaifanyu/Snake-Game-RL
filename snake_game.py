@@ -24,7 +24,7 @@ GREEN2 = (167, 201, 87)
 BLACK = (0,0,0)
 
 BLOCK_SIZE = 20
-SPEED = 40
+SPEED = 100
 
 class SnakeGame:
 
@@ -32,9 +32,9 @@ class SnakeGame:
         self.w = w
         self.h = h
         # init display
-        self.display = pygame.display.set_mode((self.w, self.h))
-        pygame.display.set_caption('Snake')
-        self.clock = pygame.time.Clock()
+        # self.display = pygame.display.set_mode((self.w, self.h))
+        # pygame.display.set_caption('Snake')
+        # self.clock = pygame.time.Clock()
         self.reset()
 
 
@@ -90,8 +90,8 @@ class SnakeGame:
             self.snake.pop()
         
         # 5. update ui and clock
-        self._update_ui()
-        self.clock.tick(SPEED)
+        # self._update_ui()
+        # self.clock.tick(SPEED)
         # 6. return game over and score
         return reward, game_over, self.score
 

@@ -1,17 +1,20 @@
-from snake_game import *
 import pickle
 from collections import deque
+import signal
+import sys
+from snake_game import *
 from qlearning import *
-from dqn import *
+from double_dqn import *
+from vanilla_dqn import *
 
 class Agent:
     #record the 'states' of the game
-    def __init__(self, model):
+    def __init__(self):
         self.n_games = 0
-        self.model = model
         self.score_history = []
         self.move = [[1,0,0], [0,1,0],[0,0,1]] #straight right left
-        self.max_games = 2000
+        self.max_games = 1000
+
 
     def get_state(self, game):
         head = game.snake[0]
@@ -64,8 +67,7 @@ class Agent:
         # keep result as a state tuple
         result = tuple(map(int, state))
         return result
-
-
+  
 def train_tabular():
     model = tabular()
     agent = Agent(model)
@@ -114,55 +116,115 @@ def train_tabular():
         # 2) Use pickle.dump to write the data to the file
         pickle.dump(data, f)
 
-
-def train_dqn():
-    model = DeepQLearn()
-    agent = Agent(model=model)
+def train_dqn_vanilla():
+    model = Vanilla_DQN()
+    agent = Agent()
     game = SnakeGame()
     game.reset()
 
-    episodes = 100
-    memory = deque([], maxlen=episodes)
+    MAX_MEMORY = 100000
+    memory = deque([], maxlen=MAX_MEMORY)
 
-    print("Starting Game")
-    for i in range(agent.max_games):
-        recieve_reward = False
+    global_step = 0
 
-        while True:
-            print("Game: ", i)
-            # get current state of game
-            old_state = agent.get_state(game)
+    try:
+        for episode in range(agent.max_games):
+            while True:
+                #counter
+                global_step += 1
 
-            # get action from model
-            action_index = agent.model.action(old_state)
-            action_vector = agent.move[action_index]
+                # get current state of game
+                old_state = agent.get_state(game)
 
-            # play the action in game
-            reward, game_over, score = game.play_step(action_vector)
+                # get action from model
+                action_index = model.action(old_state)
+                action_vector = agent.move[action_index]
 
-            # get the new state after action
-            new_state = agent.get_state(game)
+                # play the action in game
+                reward, game_over, score = game.play_step(action_vector)
 
-            # if we recieved a reward and we have not yet recieved a reward
-            if reward > 0 and not recieve_reward:
-                recieve_reward = True   #set it to true
+                # get the new state after action
+                new_state = agent.get_state(game)
+                
+                sequence = (old_state, action_index, new_state, reward, game_over)
+                # append this sequence in memory
+                memory.append(sequence)
 
-            memory.append((old_state, action_index, new_state, reward, game_over))
-            # update the model
-            # if our memory is full and we have recieved reward
-            if len(memory) > episodes and recieve_reward:
-                mini_batch = random.sample(memory, 32)
-                agent.model.update(mini_batch)
+                # Sample batch and update
+                if len(memory) >= model.batch_size:
+                    batch = random.sample(memory, model.batch_size)
+                    model.update(batch, global_step)
 
-            # agent.model.update(old_state, new_state, action_index, reward, game_over)
-            if game_over:
-                game.reset()
-                agent.n_games += 1
-                break
+                if game_over:
+                    game.reset()
+                    agent.n_games += 1
+                    break
 
-        agent.score_history.append(score)
-        agent.model.epsilon = max(agent.model.epsilon_min,
-                                agent.model.epsilon * agent.model.epsilon_decay)
+            print("Game: ", episode, "score: ", score)
+            
+            model.update_epsilon()
+            model.writer.add_scalar("Score/episodes", score, episode)
+            model.writer.add_scalar("Params/epsilon", model.epsilon, episode)
+
+    except KeyboardInterrupt:
+        model.save_model()
+    finally:
+        model.save_model()
+
+def train_dqn_target_policy():
+    model = Double_DQN()
+    agent = Agent()
+    game = SnakeGame()
+    game.reset()
+
+    MAX_MEMORY = 100000
+    memory = deque([], maxlen=MAX_MEMORY)
+
+    global_step = 0
+
+    try:
+        for episode in range(agent.max_games):
+            while True:
+                #counter
+                global_step += 1
+
+                # get current state of game
+                old_state = agent.get_state(game)
+
+                # get action from model
+                action_index = model.action(old_state)
+                action_vector = agent.move[action_index]
+
+                # play the action in game
+                reward, game_over, score = game.play_step(action_vector)
+
+                # get the new state after action
+                new_state = agent.get_state(game)
+                
+                sequence = (old_state, action_index, new_state, reward, game_over)
+                # append this sequence in memory
+                memory.append(sequence)
+
+                # Sample batch and update
+                if len(memory) >= model.batch_size:
+                    batch = random.sample(memory, model.batch_size)
+                    model.update(batch, global_step)
+
+                if game_over:
+                    game.reset()
+                    agent.n_games += 1
+                    break
+
+            print("Game: ", episode, "score: ", score)
+            
+            model.update_epsilon()
+            model.writer.add_scalar("Score/episodes", score, episode)
+            model.writer.add_scalar("Params/epsilon", model.epsilon, episode)
+
+    except KeyboardInterrupt:
+        model.save_model()
+    finally:
+        model.save_model()
 
 if __name__ == "__main__":
-    train_dqn()
+    train_dqn_target_policy()
