@@ -6,7 +6,7 @@ from snake_game import *
 from qlearning import *
 from double_dqn import *
 from vanilla_dqn import *
-
+from policy_gradient import *
 class Agent:
     #record the 'states' of the game
     def __init__(self):
@@ -213,6 +213,53 @@ def train_dqn_target_policy():
                 if game_over:
                     game.reset()
                     agent.n_games += 1
+                    break
+
+            print("Game: ", episode, "score: ", score)
+            
+            model.update_epsilon()
+            model.writer.add_scalar("Score/episodes", score, episode)
+            model.writer.add_scalar("Params/epsilon", model.epsilon, episode)
+
+    except KeyboardInterrupt:
+        model.save_model()
+    finally:
+        model.save_model()
+
+def train_policy_gradient():
+    model = Policy()
+    agent = Agent()
+    game = SnakeGame()
+    game.reset()
+
+    global_step = 0
+
+    try:
+        for episode in range(agent.max_games):
+            states = []
+            actions = []
+            while True:
+                #counter
+                global_step += 1
+
+                # get current state of game
+                old_state = agent.get_state(game)
+
+                states.append(old_state)
+
+                # get action from model
+                action_index = model.action(old_state)
+                action_vector = agent.move[action_index]
+                
+                actions.append(action_vector)
+
+                # play the action in game
+                reward, game_over, score = game.play_step(action_vector)
+
+                if game_over:
+                    game.reset()
+                    agent.n_games += 1
+                    model.update(states, actions, reward)
                     break
 
             print("Game: ", episode, "score: ", score)
