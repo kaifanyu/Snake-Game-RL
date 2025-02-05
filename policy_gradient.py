@@ -54,6 +54,18 @@ class Policy():
         self.policy_optimizer = optim.Adam(self.policy_net.parameters(), lr=self.theta_learning_rate)
         self.value_optimizer = optim.Adam(self.value_net.parameters(), lr=self.value_learning_rate)
 
+        # load model if exist
+        self._load_model()
+
+    def _load_model(self):
+        value_checkpoint_path = 'models/pg_value_net.pth'
+        policy_checkpoint_path = 'models/pg_policy_net.pth'
+        if os.path.exists(value_checkpoint_path) and os.path.exists(policy_checkpoint_path):
+            self.policy_net.load_state_dict(torch.load(policy_checkpoint_path, map_location=self.device, weights_only=True))
+            self.value_net.load_state_dict(torch.load(value_checkpoint_path, map_location=self.device, weights_only=True))
+            print(f"Loaded existing weights from {policy_checkpoint_path} and {value_checkpoint_path}.")
+        else:
+            print("No existing checkpoint found. Starting fresh.")
     def action(self, state):
         # convert state to tensor
         state_tensor = torch.tensor(state).float().unsqueeze(0)
@@ -68,7 +80,7 @@ class Policy():
     def update(self, states, actions, reward):
         #sequence contains an entire time-series of how we reached the terminal goal
         # convert to tensors
-        states = torch.tensor(states, dtype=torch.float32).to(self.device)
+        states = torch.tensor(np.array(states), dtype=torch.float32).to(self.device)
         actions = torch.tensor(actions, dtype=torch.int64).to(self.device)
 
         # Compute Returns G_t with Discounting
@@ -88,7 +100,7 @@ class Policy():
         action_log_probs = torch.log(action_probs.gather(1, actions.unsqueeze(1)).squeeze())
 
         # Create discount factors: [γ^0, γ^1, ..., γ^(T-1)]
-        discount_factors = torch.pow(self.discount, torch.arange(len(states), dtype=torch.float32).to(self.device))
+        discount_factors = torch.pow(self.discount, torch.arange(len(states), dtype=torch.float32).to(self.device)).unsqueeze(1)
 
         # Apply discounting to the advantage function
         policy_loss = -torch.sum(discount_factors * action_log_probs * advantage.detach())  # Negative for gradient ascent
@@ -106,3 +118,8 @@ class Policy():
         self.value_optimizer.zero_grad()
         value_loss.backward()
         self.value_optimizer.step()
+
+    def save_model(self):
+        print("Policy Gradient Model saved")
+        torch.save(self.policy_net.state_dict(), 'models/pg_policy_net.pth')
+        torch.save(self.value_net.state_dict(), 'models/pg_value_net.pth')

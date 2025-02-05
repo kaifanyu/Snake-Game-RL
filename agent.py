@@ -7,6 +7,8 @@ from qlearning import *
 from double_dqn import *
 from vanilla_dqn import *
 from policy_gradient import *
+from ppo import *
+
 class Agent:
     #record the 'states' of the game
     def __init__(self):
@@ -251,7 +253,7 @@ def train_policy_gradient():
                 action_index = model.action(old_state)
                 action_vector = agent.move[action_index]
                 
-                actions.append(action_vector)
+                actions.append(action_index)
 
                 # play the action in game
                 reward, game_over, score = game.play_step(action_vector)
@@ -263,8 +265,59 @@ def train_policy_gradient():
                     break
 
             print("Game: ", episode, "score: ", score)
+            model.writer.add_scalar("Score/episodes", score, episode)
+
+    except KeyboardInterrupt:
+        model.save_model()
+    finally:
+        model.save_model()
+
+def train_ppo():
+    model = PPO()
+    agent = Agent()
+    game = SnakeGame()
+    game.reset()
+
+    MAX_MEMORY = 100000
+    memory = deque([], maxlen=MAX_MEMORY)
+
+    global_step = 0
+
+    try:
+        for episode in range(agent.max_games):
+            while True:
+                #counter
+                global_step += 1
+
+                # get current state of game
+                old_state = agent.get_state(game)
+
+                # get action from model
+                action_index = model.action(old_state)
+                action_vector = agent.move[action_index]
+
+                # play the action in game
+                reward, game_over, score = game.play_step(action_vector)
+
+                # get the new state after action
+                new_state = agent.get_state(game)
+                
+                sequence = (old_state, action_index, new_state, reward, game_over)
+                # append this sequence in memory
+                memory.append(sequence)
+
+                # Sample batch and update, batch size = 2048
+                if len(memory) >= model.batch_size:
+                    batch = random.sample(memory, model.batch_size)
+                    model.update(batch, global_step)
+
+                if game_over:
+                    game.reset()
+                    agent.n_games += 1
+                    break
+
+            print("Game: ", episode, "score: ", score)
             
-            model.update_epsilon()
             model.writer.add_scalar("Score/episodes", score, episode)
             model.writer.add_scalar("Params/epsilon", model.epsilon, episode)
 
@@ -274,4 +327,4 @@ def train_policy_gradient():
         model.save_model()
 
 if __name__ == "__main__":
-    train_dqn_target_policy()
+    train_ppo()
