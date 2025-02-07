@@ -5,34 +5,104 @@ import random
 import numpy as np
 import os
 from torch.utils.tensorboard import SummaryWriter
+from collections import deque
 
-class Value_NN(nn.Module):
-    def __init__(self, num_states, output, dim):
-        super().__init__()
-        self.nn = nn.Sequential(
-            nn.Linear(num_states, dim),
+
+class ValueNet(nn.Module):
+    def __init__(self, num_states, alpha, fc1, chkpt_dir='models/ppo_value.pth'):
+        super(ValueNet, self).__init__()
+        self.critic = nn.Sequential(
+            nn.Linear(num_states, fc1),
             nn.ReLU(),
-            nn.Linear(dim, output)
+            nn.Linear(fc1, 1)
         )
 
+        self.optimizer = optim.Adam(self.parameters(), lr=alpha)
+        self.checkpoint_file = chkpt_dir
+    
     def forward(self, x):
-        return self.nn(x)
+        return self.critic(x)
+    
+    def save_checkpoint(self):
+        torch.save(self.state_dict(), self.checkpoint_file)
 
-class NN(nn.Module):
-    def __init__(self, num_states, num_actions, dim):
-        super().__init__()
-        self.nn = nn.Sequential(
-            nn.Linear(num_states, dim),
+    def load_checkpoint(self):
+        self.load_state_dict(torch.load(self.checkpoint_file, weights_only=True))    
+
+class PolicyNet(nn.Module):
+    def __init__(self, num_states, num_actions, alpha, fc1, chkpt_dir='models/ppo_policy.pth'):
+        super(PolicyNet, self).__init__()
+        self.actor = nn.Sequential(
+            nn.Linear(num_states, fc1),
             nn.ReLU(),
-            nn.Linear(dim, num_actions),
+            nn.Linear(fc1, num_actions),
             nn.Softmax(dim=-1)
         )
 
-    def forward(self, x):
-        return self.nn(x)
+        self.optimizer = optim.Adam(self.parameters(), lr=alpha)
+        self.checkpoint_file = chkpt_dir
 
-class PPO():
-    def __init__(self):
+    def forward(self, x):
+        return self.actor(x)
+    
+    def save_checkpoint(self):
+        torch.save(self.state_dict(), self.checkpoint_file)
+
+    def load_checkpoint(self):
+        self.load_state_dict(torch.load(self.checkpoint_file, weights_only=True))    
+
+    
+class PPOMemory:
+    def __init__(self, batch_size):
+        self.states = []
+        self.actions = []
+        self.action_probs = []
+        self.values = []
+        self.rewards = []
+        self.done = []
+
+        self.batch_size = batch_size
+    
+    
+    def generate_batches(self):
+        n_states = len(self.states)
+
+        # Convert lists to tensors
+        states = torch.tensor(self.states, dtype=torch.float32)
+        actions = torch.tensor(self.actions, dtype=torch.int64)
+        action_probs = torch.tensor(self.action_probs, dtype=torch.float32)
+        values = torch.tensor(self.values, dtype=torch.float32)
+        rewards = torch.tensor(self.rewards, dtype=torch.float32)
+        dones = torch.tensor(self.dones, dtype=torch.float32)
+
+        # Shuffle indices
+        indices = torch.randperm(n_states)  # Shuffles indices
+        batches = [indices[i : i + self.batch_size] for i in range(0, n_states, self.batch_size)]
+
+        return states[batches], actions[batches], action_probs[batches], values[batches], rewards[batches], dones[batches]
+    
+    def store_memory(self, state, action, action_prob, value, reward, done):
+        self.states.append(state)
+        self.actions.append(action)
+        self.action_probs.append(action_prob)
+        self.values.append(value)
+        self.rewards.append(reward)
+        self.dones.append(done)
+
+    def clear_memory(self):
+        self.states = []
+        self.actions = []
+        self.action_probs = []
+        self.values = []
+        self.rewards = []
+        self.dones = []
+
+class PPO:
+    def __init__(self, agent, game):
+
+        self.agent = agent
+        self.game = game
+
         self.hidden_dim = 64
         self.num_states = 11
         self.num_actions = 3
@@ -50,23 +120,72 @@ class PPO():
         self.weighting_factor = 0.5
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+        self.memory = PPOMemory(self.batch_size)
+
         # policy network
-        self.policy_net = NN(num_states=self.num_states, num_actions=self.num_actions, dim=self.hidden_dim)
+        self.policy_net = PolicyNet(self.num_states, self.num_actions, self.hidden_dim)
         self.policy_net.to(self.device)
         
         # Value network (outputs baseline value function V(s))
-        self.value_net = Value_NN(num_states=self.num_states, output=1, dim=self.hidden_dim)  # Outputs a scalar V(s)
+        self.value_net = ValueNet(self.num_states, self.num_actions, self.value_learning_rate)  # Outputs a scalar V(s)
         self.value_net.to(self.device)
-
 
         # Optimizers
         self.policy_optimizer = optim.Adam(self.policy_net.parameters(), lr=self.theta_learning_rate)
         self.value_optimizer = optim.Adam(self.value_net.parameters(), lr=self.value_learning_rate)
 
-        self.writer = SummaryWriter('runs/snake_dqn')  # specify log dir
-
+        self.writer = SummaryWriter('runs/ppo')  # specify log dir
+        self.loss_history = []
         # load model if exist
         self._load_model()
+
+    def train(self):
+
+        for _ in range(self.ppo_epochs):
+            states, actions, old_probs, values, rewards, dones, = self.memory.generate_batches()
+
+            advantage = torch.zeros_like(rewards)
+
+            # Compute Advantage Value
+            for t in reversed(range(len(rewards))):
+                # delta = r + discount * value[t+1] - value[t] 
+                delta = rewards[t] + self.discount * values[t + 1] * (1-dones[t]) - values[t]
+                # a = delta + self.discount * gae_lambda * a[t+1]
+                a_t = delta + self.discount * self.GAE * (1 - dones[t]) * (advantage[t+1] if t + 1 < len(rewards) else 0)
+                advantage[t] = a_t
+
+            for i in range(len(states)):
+                # policy of new states
+                new_probs = self.policy_net(states[i]).log_prob(actions[i])
+                new_value = self.value_net(states[i]).squeeze(0)
+
+                ratio = new_probs.exp() / old_probs[i].exp()
+
+                unclipped = ratio * advantage[i]
+
+                clipped = torch.clamp(ratio, self.min_change, self.max_change) * advantage[i]
+
+                policy_loss = -torch.min(unclipped, clipped).mean()
+
+                returns = advantage[i] + values[i]
+                value_loss = (returns - new_value) ** 2
+                value_loss = value_loss.mean()
+
+                total_loss = policy_loss + self.weighting_factor * value_loss
+
+                self.policy_net.optimizer.zero_grad()
+                self.value_net.optimizer.zero_grad()
+
+                total_loss.backward()
+
+                self.policy_net.optimizer.step()
+                self.value_net.optimizer.step()
+
+        self.memory.clear_memory()
+
+    def remember(self, state, action, probs, vals, reward, done):
+        self.memory.store_memory(state, action, probs, vals, reward, done)
+
 
     def _load_model(self):
         value_checkpoint_path = 'models/ppo_value_net.pth'
@@ -89,90 +208,7 @@ class PPO():
 
         return action
 
-    def update(self, batch, global_step):
-
-        # Unpack batch into separate lists
-        old_states, action_indices, new_states, rewards, game_overs = zip(*batch)
-
-        # Convert to tensors
-        old_states = torch.tensor(old_states, dtype=torch.float32).to(self.device)
-        action_indices = torch.tensor(action_indices, dtype=torch.long).to(self.device)
-        new_states = torch.tensor(new_states, dtype=torch.float32).to(self.device)
-        rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
-        game_overs = torch.tensor(game_overs, dtype=torch.bool).to(self.device)
-
-        with torch.no_grad():
-            # Get old policy probability distribution based on state
-            policy_old = self.policy_net(old_states)
-            old_probs = policy_old.gather(1, action_indices.unsqueeze(1)).squeeze(1)
-            old_log_probs = torch.log(old_probs + 1e-8)
-
-        # Compute V(s) - Value of old states
-        V_s = self.value_net(old_states).squeeze(1)  # shape [N]
-        # Compute V(st+1) - Value of new states
-        V_snew = self.value_net(new_states).squeeze(1)  # shape [N]
-
-        advantages = torch.zeros_like(rewards).to(self.device)
-        returns = torch.zeros_like(rewards).to(self.device)
-
-        # Compute delta = r + discount * V(s') - V(s) (only if not terminal)
-        delta = rewards + V_snew * self.discount * (~game_overs) - V_s
-
-        # Compute advantages using Generalized Advantage Estimation (GAE)
-        advantages[-1] = delta[-1]
-        for t in reversed(range(len(rewards) - 1)):
-            if game_overs[t]:
-                advantages[t] = delta[t]
-            else:
-                advantages[t] = delta[t] + (self.discount * self.GAE * advantages[t+1])
-
-        returns = advantages + V_s  # Returns(t) = Advantage(t) + V(s)
-
-        # Mini-batch training: split batch into smaller batches
-        for epoch in range(self.ppo_epochs):
-            indices = torch.randperm(self.batch_size)
-
-            for t in range(self.num_mini_batch):
-                idx = indices[t * self.mini_batch: (t + 1) * self.mini_batch]
-
-                # Select mini-batch samples
-                mini_states = old_states[idx]
-                mini_actions = action_indices[idx]
-                mini_advantages = advantages[idx].detach()
-                mini_returns = returns[idx].detach()
-                mini_old_log_probs = old_log_probs[idx].detach()
-
-                # Get new policy π(new)
-                new_policy_probs = self.policy_net(mini_states)
-                new_probs = new_policy_probs.gather(1, mini_actions.unsqueeze(1)).squeeze(1)
-                new_log_probs = torch.log(new_probs + 1e-8)
-
-
-                # Compute policy ratio r(θ)
-                ratio = torch.exp(new_log_probs - mini_old_log_probs)
-
-                # Compute clipped policy loss
-                unclipped = ratio * mini_advantages
-                clipped = torch.clamp(ratio, self.min_change, self.max_change) * mini_advantages
-                policy_loss = -torch.mean(torch.min(unclipped, clipped))
-
-                # Compute value loss
-                value_loss = nn.functional.mse_loss(self.value_net(mini_states).squeeze(1), mini_returns)
-
-                total_loss = policy_loss + value_loss
-
-                # Backpropagation
-                self.policy_optimizer.zero_grad()
-                self.value_optimizer.zero_grad()
-                total_loss.backward()
-                self.policy_optimizer.step()
-                self.value_optimizer.step()
-
-        self.writer.add_scalar("Loss/total_loss", total_loss.item(), global_step)
-        self.writer.add_scalar("Loss/policy_loss", policy_loss.item(), global_step)
-        self.writer.add_scalar("Loss/value_loss", value_loss.item(), global_step)
-
-    def save_model(self):
+    def _save_model(self):
         print("PPO Model saved")
         torch.save(self.policy_net.state_dict(), 'models/ppo_policy_net.pth')
         torch.save(self.value_net.state_dict(), 'models/ppo_value_net.pth')

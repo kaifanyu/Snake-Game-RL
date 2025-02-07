@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import random
 import numpy as np
 import os
 from torch.utils.tensorboard import SummaryWriter
@@ -32,7 +31,11 @@ class NN(nn.Module):
         return self.nn(x)
 
 class Policy():
-    def __init__(self):
+    def __init__(self, agent, game):
+
+        self.agent = agent
+        self.game = game
+
         self.hidden_dim = 64
         self.discount = 0.9
         self.value_learning_rate = 0.01
@@ -54,18 +57,12 @@ class Policy():
         self.policy_optimizer = optim.Adam(self.policy_net.parameters(), lr=self.theta_learning_rate)
         self.value_optimizer = optim.Adam(self.value_net.parameters(), lr=self.value_learning_rate)
 
+        self.writer = SummaryWriter('runs/policy_gradient')  # specify log dir
+        self.loss_history = []
+
         # load model if exist
         self._load_model()
 
-    def _load_model(self):
-        value_checkpoint_path = 'models/pg_value_net.pth'
-        policy_checkpoint_path = 'models/pg_policy_net.pth'
-        if os.path.exists(value_checkpoint_path) and os.path.exists(policy_checkpoint_path):
-            self.policy_net.load_state_dict(torch.load(policy_checkpoint_path, map_location=self.device, weights_only=True))
-            self.value_net.load_state_dict(torch.load(value_checkpoint_path, map_location=self.device, weights_only=True))
-            print(f"Loaded existing weights from {policy_checkpoint_path} and {value_checkpoint_path}.")
-        else:
-            print("No existing checkpoint found. Starting fresh.")
     def action(self, state):
         # convert state to tensor
         state_tensor = torch.tensor(state).float().unsqueeze(0)
@@ -119,7 +116,67 @@ class Policy():
         value_loss.backward()
         self.value_optimizer.step()
 
-    def save_model(self):
+        self.loss_history.append(policy_loss.item())
+
+
+    def train(self):
+        self.game.reset()
+
+        global_step = 0
+        model_saved = False
+
+        try:
+            for episode in range(self.agent.max_games):
+                states = []
+                actions = []
+                while True:
+                    #counter
+                    global_step += 1
+
+                    # get current state of self.game
+                    old_state = self.agent.get_state(self.game)
+
+                    states.append(old_state)
+
+                    # get action from self
+                    action_index = self.action(old_state)
+                    action_vector = self.agent.move[action_index]
+                    
+                    actions.append(action_index)
+
+                    # play the action in self.game
+                    reward, game_over, score = self.game.play_step(action_vector)
+
+                    if game_over:
+                        self.game.reset()
+                        self.agent.score_history.append(score)
+                        self.update(states, actions, reward)    #update full episodes 
+                        break
+
+                print("Game: ", episode, "score: ", score)
+
+        except KeyboardInterrupt:
+            self._save_model()
+            self.agent.save("policy_gradient", self.loss_history)
+            model_saved = True
+        finally:
+            if not model_saved:
+                self._save_model()
+                self.agent.save("policy_gradient", self.loss_history)
+            
+    def _save_model(self):
         print("Policy Gradient Model saved")
         torch.save(self.policy_net.state_dict(), 'models/pg_policy_net.pth')
         torch.save(self.value_net.state_dict(), 'models/pg_value_net.pth')
+
+    
+    def _load_model(self):
+        value_checkpoint_path = 'models/pg_value_net.pth'
+        policy_checkpoint_path = 'models/pg_policy_net.pth'
+        if os.path.exists(value_checkpoint_path) and os.path.exists(policy_checkpoint_path):
+            self.policy_net.load_state_dict(torch.load(policy_checkpoint_path, map_location=self.device, weights_only=True))
+            self.value_net.load_state_dict(torch.load(value_checkpoint_path, map_location=self.device, weights_only=True))
+            print(f"Loaded existing weights from {policy_checkpoint_path} and {value_checkpoint_path}.")
+        else:
+            print("No existing checkpoint found. Starting fresh.")
+            

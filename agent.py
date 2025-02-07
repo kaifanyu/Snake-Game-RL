@@ -1,9 +1,6 @@
 import pickle
-from collections import deque
-import signal
-import sys
 from snake_game import *
-from qlearning import *
+from tabular import *
 from double_dqn import *
 from vanilla_dqn import *
 from policy_gradient import *
@@ -12,10 +9,9 @@ from ppo import *
 class Agent:
     #record the 'states' of the game
     def __init__(self):
-        self.n_games = 0
+        self.max_games = 10
         self.score_history = []
         self.move = [[1,0,0], [0,1,0],[0,0,1]] #straight right left
-        self.max_games = 1000
 
 
     def get_state(self, game):
@@ -69,262 +65,27 @@ class Agent:
         # keep result as a state tuple
         result = tuple(map(int, state))
         return result
-  
-def train_tabular():
-    model = tabular()
-    agent = Agent(model)
-    game = SnakeGame()
-    game.reset()
-    
 
-    for i in range(agent.max_games):
+    def save(self, type, loss=[]):
+        result_file = "result.pkl"
+        output = {}
 
-        while True: 
-            # get the current state of the game
-            old_state = agent.get_state(game)
+        # Load existing results if the file exists
+        if os.path.exists(result_file):
+            with open(result_file, 'rb') as f:
+                output = pickle.load(f)
+                print(f"Loaded results from {result_file}")
 
-            # figure out what move it will play next
-            action_index = agent.model.action(old_state)
+        # Ensure the type exists in output
+        if type not in output:
+            output[type] = {"score": [], "loss": []}  # Initialize if not present
             
-            # convert the index to move
-            action_vector = agent.move[action_index]
+        # Append the latest score history
+        output[type]["score"].extend(self.score_history)
+        output[type]["loss"].extend(loss)
+        
+        # Save the updated results back to file
+        with open(result_file, 'wb') as f:
+            pickle.dump(output, f)
 
-            # play the action in the game
-            reward, game_over, score = game.play_step(action_vector)
-
-            # get the new state of the game
-            new_state = agent.get_state(game)
-
-            # update the model, in this case, update the Q table
-            agent.model.update(old_state, new_state, action_index, reward, game_over)
-
-            if game_over:
-                game.reset()
-                agent.n_games += 1
-                break
-
-        agent.score_history.append(score)
-        # decrement epsilon so over time, we explore less and follow our model
-        # agent.model.epsilon = max(agent.model.epsilon_min,
-        #                         agent.model.epsilon * agent.model.epsilon_decay)
-
-    data = {
-        'Q_table': agent.model.Q,
-        'score': agent.score_history,
-    }
-
-    # 1) Open a file in 'write binary' mode
-    with open('qlearn.pkl', 'wb') as f:
-        # 2) Use pickle.dump to write the data to the file
-        pickle.dump(data, f)
-
-def train_dqn_vanilla():
-    model = Vanilla_DQN()
-    agent = Agent()
-    game = SnakeGame()
-    game.reset()
-
-    MAX_MEMORY = 100000
-    memory = deque([], maxlen=MAX_MEMORY)
-
-    global_step = 0
-
-    try:
-        for episode in range(agent.max_games):
-            while True:
-                #counter
-                global_step += 1
-
-                # get current state of game
-                old_state = agent.get_state(game)
-
-                # get action from model
-                action_index = model.action(old_state)
-                action_vector = agent.move[action_index]
-
-                # play the action in game
-                reward, game_over, score = game.play_step(action_vector)
-
-                # get the new state after action
-                new_state = agent.get_state(game)
-                
-                sequence = (old_state, action_index, new_state, reward, game_over)
-                # append this sequence in memory
-                memory.append(sequence)
-
-                # Sample batch and update
-                if len(memory) >= model.batch_size:
-                    batch = random.sample(memory, model.batch_size)
-                    model.update(batch, global_step)
-
-                if game_over:
-                    game.reset()
-                    agent.n_games += 1
-                    break
-
-            print("Game: ", episode, "score: ", score)
-            
-            model.update_epsilon()
-            model.writer.add_scalar("Score/episodes", score, episode)
-            model.writer.add_scalar("Params/epsilon", model.epsilon, episode)
-
-    except KeyboardInterrupt:
-        model.save_model()
-    finally:
-        model.save_model()
-
-def train_dqn_target_policy():
-    model = Double_DQN()
-    agent = Agent()
-    game = SnakeGame()
-    game.reset()
-
-    MAX_MEMORY = 100000
-    memory = deque([], maxlen=MAX_MEMORY)
-
-    global_step = 0
-
-    try:
-        for episode in range(agent.max_games):
-            while True:
-                #counter
-                global_step += 1
-
-                # get current state of game
-                old_state = agent.get_state(game)
-
-                # get action from model
-                action_index = model.action(old_state)
-                action_vector = agent.move[action_index]
-
-                # play the action in game
-                reward, game_over, score = game.play_step(action_vector)
-
-                # get the new state after action
-                new_state = agent.get_state(game)
-                
-                sequence = (old_state, action_index, new_state, reward, game_over)
-                # append this sequence in memory
-                memory.append(sequence)
-
-                # Sample batch and update
-                if len(memory) >= model.batch_size:
-                    batch = random.sample(memory, model.batch_size)
-                    model.update(batch, global_step)
-
-                if game_over:
-                    game.reset()
-                    agent.n_games += 1
-                    break
-
-            print("Game: ", episode, "score: ", score)
-            
-            model.update_epsilon()
-            model.writer.add_scalar("Score/episodes", score, episode)
-            model.writer.add_scalar("Params/epsilon", model.epsilon, episode)
-
-    except KeyboardInterrupt:
-        model.save_model()
-    finally:
-        model.save_model()
-
-def train_policy_gradient():
-    model = Policy()
-    agent = Agent()
-    game = SnakeGame()
-    game.reset()
-
-    global_step = 0
-
-    try:
-        for episode in range(agent.max_games):
-            states = []
-            actions = []
-            while True:
-                #counter
-                global_step += 1
-
-                # get current state of game
-                old_state = agent.get_state(game)
-
-                states.append(old_state)
-
-                # get action from model
-                action_index = model.action(old_state)
-                action_vector = agent.move[action_index]
-                
-                actions.append(action_index)
-
-                # play the action in game
-                reward, game_over, score = game.play_step(action_vector)
-
-                if game_over:
-                    game.reset()
-                    agent.n_games += 1
-                    model.update(states, actions, reward)
-                    break
-
-            print("Game: ", episode, "score: ", score)
-            model.writer.add_scalar("Score/episodes", score, episode)
-
-    except KeyboardInterrupt:
-        model.save_model()
-    finally:
-        model.save_model()
-
-def train_ppo():
-    model = PPO()
-    agent = Agent()
-    game = SnakeGame()
-    game.reset()
-
-    MAX_MEMORY = 100000
-    memory = deque([], maxlen=MAX_MEMORY)
-
-    global_step = 0
-
-    try:
-        for episode in range(agent.max_games):
-            while True:
-                #counter
-                global_step += 1
-
-                # get current state of game
-                old_state = agent.get_state(game)
-
-                # get action from model
-                action_index = model.action(old_state)
-                action_vector = agent.move[action_index]
-
-                # play the action in game
-                reward, game_over, score = game.play_step(action_vector)
-
-                # get the new state after action
-                new_state = agent.get_state(game)
-                
-                sequence = (old_state, action_index, new_state, reward, game_over)
-                # append this sequence in memory
-                memory.append(sequence)
-
-                # Sample batch and update, batch size = 2048
-                if len(memory) >= model.batch_size:
-                    batch = random.sample(memory, model.batch_size)
-                    model.update(batch, global_step)
-
-                if game_over:
-                    game.reset()
-                    agent.n_games += 1
-                    break
-
-            print("Game: ", episode, "score: ", score)
-            
-            model.writer.add_scalar("Score/episodes", score, episode)
-            model.writer.add_scalar("Params/epsilon", model.epsilon, episode)
-
-    except KeyboardInterrupt:
-        model.save_model()
-    finally:
-        model.save_model()
-
-if __name__ == "__main__":
-    train_ppo()
+        print(f"Updated result file with {len(self.score_history)} new scores.")
